@@ -12,6 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
     <style>
         body {
@@ -60,6 +61,43 @@
 </head>
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
 
+    <section id="auth-screen" class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-md rounded-2xl border border-slate-200 shadow-xl p-6 space-y-5">
+            <div class="text-center space-y-2">
+                <div class="mx-auto bg-blue-600 w-12 h-12 rounded-xl text-white flex items-center justify-center text-xl">
+                    <i class="fa-solid fa-headset"></i>
+                </div>
+                <h1 class="text-xl font-bold text-slate-800">Ordens de Serviço</h1>
+                <p class="text-sm text-slate-500">Entre para sincronizar suas ordens entre seus aparelhos.</p>
+            </div>
+
+            <div id="supabase-config-panel" class="space-y-3">
+                <p class="text-xs text-slate-600">Configure a conexão do Supabase uma vez em cada aparelho. Use somente a chave pública (anon ou publishable), nunca a service_role.</p>
+                <label class="block text-xs font-semibold text-slate-700">URL do projeto Supabase
+                    <input id="supabase-url" type="url" placeholder="https://seu-projeto.supabase.co" class="mt-1 w-full px-3 py-2 text-sm border border-slate-300 rounded-lg">
+                </label>
+                <label class="block text-xs font-semibold text-slate-700">Chave pública (anon / publishable)
+                    <input id="supabase-anon-key" type="password" autocomplete="off" placeholder="Cole a chave pública do projeto" class="mt-1 w-full px-3 py-2 text-sm border border-slate-300 rounded-lg">
+                </label>
+                <button onclick="configureSupabase()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold text-sm py-2.5 rounded-lg">Salvar conexão</button>
+            </div>
+
+            <form id="auth-form" class="hidden space-y-3" onsubmit="submitAuth(event)">
+                <label class="block text-xs font-semibold text-slate-700">E-mail
+                    <input id="auth-email" type="email" autocomplete="email" required class="mt-1 w-full px-3 py-2 text-sm border border-slate-300 rounded-lg">
+                </label>
+                <label class="block text-xs font-semibold text-slate-700">Senha
+                    <input id="auth-password" type="password" autocomplete="current-password" minlength="6" required class="mt-1 w-full px-3 py-2 text-sm border border-slate-300 rounded-lg">
+                </label>
+                <button id="auth-submit-button" type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm py-2.5 rounded-lg">Entrar</button>
+                <button id="auth-mode-button" type="button" onclick="toggleAuthMode()" class="w-full text-blue-700 text-sm font-medium">Criar uma conta</button>
+                <button type="button" onclick="editSupabaseConfiguration()" class="w-full text-slate-500 text-xs underline">Alterar conexão Supabase</button>
+            </form>
+            <p id="auth-message" role="status" class="text-sm text-center text-slate-600"></p>
+        </div>
+    </section>
+
+    <div id="app-container" class="hidden">
     <!-- Top Header Navigation -->
     <header class="bg-slate-900 text-white shadow-md sticky top-0 z-30 no-print">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -76,8 +114,9 @@
                 <!-- Badge on Mobile -->
                 <div class="md:hidden text-right">
                     <span class="inline-block bg-blue-900/60 text-blue-300 text-xs px-2.5 py-1 rounded-full border border-blue-700/50">
-                        <i class="fa-solid fa-user-check mr-1"></i> Carlos Alberto
+                        <i class="fa-solid fa-user-check mr-1"></i> <span id="mobile-account-email">Conta conectada</span>
                     </span>
+                    <button onclick="signOut()" class="ml-1 text-xs text-slate-300 underline">Sair</button>
                 </div>
             </div>
 
@@ -92,6 +131,7 @@
                         <strong class="text-slate-200 font-semibold text-sm">Carlos Alberto</strong>
                     </div>
                 </div>
+                <button onclick="signOut()" class="text-xs text-slate-300 hover:text-white px-2 py-2 rounded-lg border border-slate-700">Sair</button>
                 <div id="cloud-status-badge" onclick="selectCloudDBFolder()" class="cursor-pointer bg-slate-800 border border-slate-700 hover:border-blue-500 text-slate-300 text-xs px-3 py-2 rounded-lg flex items-center gap-2 transition-all" title="Clique para escolher a pasta do Google Drive/OneDrive para salvar os dados">
                     <span id="cloud-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                     <span id="cloud-status-text">Pasta Nuvem: Não Conectada</span>
@@ -832,9 +872,14 @@
         </div>
     </div>
 
+    </div>
+
     <!-- JAVASCRIPT LOGIC SECTION -->
     <script>
         let savedOrders = JSON.parse(localStorage.getItem('os_history_db')) || [];
+        let supabaseClient = null;
+        let currentUser = null;
+        let isSignUpMode = false;
         let cloudDBDirectoryHandle = null;
         let localUnitDirectoryHandle = null;
         let connectedDriveFolders = [];
@@ -856,6 +901,7 @@
             setCurrentDateTime();
             renderEquipmentPresets();
             renderHistoryTable();
+            initializeSupabase();
 
             // Carrega a chave fixa do Gemini salva no notebook
             const savedKey = localStorage.getItem('gemini_api_key');
@@ -873,6 +919,228 @@
                 updateCloudStatusBadgePending(savedHandle.name);
             }
         };
+
+        function initializeSupabase() {
+            const savedUrl = localStorage.getItem('supabase_url') || '';
+            const savedKey = localStorage.getItem('supabase_anon_key') || '';
+            document.getElementById('supabase-url').value = savedUrl;
+            document.getElementById('supabase-anon-key').value = savedKey;
+            if (!savedUrl || !savedKey) return;
+            if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+                showAuthMessage('Não foi possível carregar a biblioteca Supabase. Verifique sua conexão com a internet e recarregue a página.', true);
+                return;
+            }
+            supabaseClient = window.supabase.createClient(savedUrl, savedKey);
+            document.getElementById('supabase-config-panel').classList.add('hidden');
+            document.getElementById('auth-form').classList.remove('hidden');
+            supabaseClient.auth.getSession().then(({ data, error }) => {
+                if (error) {
+                    showAuthMessage(`Erro ao verificar a sessão: ${error.message}`, true);
+                    return;
+                }
+                if (data.session) openAuthenticatedApp(data.session.user);
+            });
+        }
+
+        function configureSupabase() {
+            const url = document.getElementById('supabase-url').value.trim().replace(/\/+$/, '');
+            const key = document.getElementById('supabase-anon-key').value.trim();
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(url);
+            } catch {
+                showAuthMessage('Informe uma URL válida do projeto Supabase.', true);
+                return;
+            }
+            if (parsedUrl.protocol !== 'https:' || !parsedUrl.hostname.endsWith('.supabase.co') || !key) {
+                showAuthMessage('Informe a URL HTTPS do projeto Supabase e a chave pública anon/publishable.', true);
+                return;
+            }
+            if (!window.supabase || typeof window.supabase.createClient !== 'function') {
+                showAuthMessage('A biblioteca Supabase não carregou. Verifique a conexão com a internet e recarregue a página.', true);
+                return;
+            }
+            localStorage.setItem('supabase_url', url);
+            localStorage.setItem('supabase_anon_key', key);
+            supabaseClient = window.supabase.createClient(url, key);
+            document.getElementById('supabase-config-panel').classList.add('hidden');
+            document.getElementById('auth-form').classList.remove('hidden');
+            showAuthMessage('Conexão salva neste aparelho. Entre com sua conta ou crie uma.');
+        }
+
+        function editSupabaseConfiguration() {
+            document.getElementById('auth-form').classList.add('hidden');
+            document.getElementById('supabase-config-panel').classList.remove('hidden');
+            showAuthMessage('Atualize a URL ou a chave pública e salve a conexão.');
+        }
+
+        function toggleAuthMode() {
+            isSignUpMode = !isSignUpMode;
+            document.getElementById('auth-submit-button').innerText = isSignUpMode ? 'Criar conta' : 'Entrar';
+            document.getElementById('auth-mode-button').innerText = isSignUpMode ? 'Já tenho uma conta' : 'Criar uma conta';
+            document.getElementById('auth-password').autocomplete = isSignUpMode ? 'new-password' : 'current-password';
+            showAuthMessage(isSignUpMode ? 'Use pelo menos 6 caracteres. O Supabase pode solicitar confirmação do e-mail.' : '');
+        }
+
+        async function submitAuth(event) {
+            event.preventDefault();
+            if (!supabaseClient) {
+                showAuthMessage('Configure primeiro a conexão com o Supabase.', true);
+                return;
+            }
+            const email = document.getElementById('auth-email').value.trim();
+            const password = document.getElementById('auth-password').value;
+            const button = document.getElementById('auth-submit-button');
+            button.disabled = true;
+            button.innerText = 'Aguarde...';
+            try {
+                const result = isSignUpMode
+                    ? await supabaseClient.auth.signUp({ email, password })
+                    : await supabaseClient.auth.signInWithPassword({ email, password });
+                if (result.error) throw result.error;
+                if (isSignUpMode && !result.data.session) {
+                    showAuthMessage('Conta criada. Confirme o e-mail enviado pelo Supabase e depois entre.');
+                } else if (result.data.session) {
+                    await openAuthenticatedApp(result.data.session.user);
+                }
+            } catch (error) {
+                showAuthMessage(`Não foi possível ${isSignUpMode ? 'criar a conta' : 'entrar'}: ${error.message}`, true);
+            } finally {
+                button.disabled = false;
+                button.innerText = isSignUpMode ? 'Criar conta' : 'Entrar';
+            }
+        }
+
+        function showAuthMessage(message, isError = false) {
+            const element = document.getElementById('auth-message');
+            element.innerText = message;
+            element.className = `text-sm text-center ${isError ? 'text-red-600' : 'text-slate-600'}`;
+        }
+
+        async function openAuthenticatedApp(user) {
+            currentUser = user;
+            const ownerId = localStorage.getItem('os_history_db_owner');
+            if (ownerId && ownerId !== user.id) {
+                savedOrders = JSON.parse(localStorage.getItem(`os_history_db_user_${user.id}`)) || [];
+            } else if (ownerId === user.id) {
+                savedOrders = JSON.parse(localStorage.getItem(`os_history_db_user_${user.id}`)) || [];
+            }
+            localStorage.setItem('os_history_db_owner', user.id);
+            persistLocalOrders();
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('app-container').classList.remove('hidden');
+            document.getElementById('mobile-account-email').innerText = user.email || 'Conta conectada';
+            renderHistoryTable();
+            try {
+                await syncOrdersWithCloud();
+            } catch (error) {
+                showToast(`Conectado, mas não foi possível sincronizar: ${error.message}`);
+            }
+        }
+
+        async function signOut() {
+            const { error } = await supabaseClient.auth.signOut();
+            if (error) {
+                showToast(`Não foi possível sair: ${error.message}`);
+                return;
+            }
+            currentUser = null;
+            document.getElementById('app-container').classList.add('hidden');
+            document.getElementById('auth-screen').classList.remove('hidden');
+            document.getElementById('auth-form').reset();
+            showAuthMessage('Sessão encerrada neste aparelho.');
+        }
+
+        function persistLocalOrders() {
+            const serialized = JSON.stringify(savedOrders);
+            localStorage.setItem('os_history_db', serialized);
+            if (currentUser) {
+                localStorage.setItem(`os_history_db_user_${currentUser.id}`, serialized);
+                localStorage.setItem('os_history_db_owner', currentUser.id);
+            }
+        }
+
+        function cloudOrderRow(order) {
+            return { user_id: currentUser.id, os_num: order.osNum, data: order };
+        }
+
+        function pendingCloudChanges() {
+            if (!currentUser) return [];
+            const key = `os_pending_sync_${currentUser.id}`;
+            const changes = JSON.parse(localStorage.getItem(key) || '[]');
+            if (!Array.isArray(changes)) throw new Error('A fila local de sincronização está inválida.');
+            return changes;
+        }
+
+        function queueCloudChange(change) {
+            if (!currentUser) return;
+            const key = `os_pending_sync_${currentUser.id}`;
+            const changes = pendingCloudChanges().filter(item => item.osNum !== change.osNum);
+            changes.push(change);
+            localStorage.setItem(key, JSON.stringify(changes));
+        }
+
+        function clearQueuedCloudChange(osNum) {
+            if (!currentUser) return;
+            const key = `os_pending_sync_${currentUser.id}`;
+            const changes = pendingCloudChanges().filter(item => item.osNum !== osNum);
+            localStorage.setItem(key, JSON.stringify(changes));
+        }
+
+        async function flushPendingCloudChanges() {
+            for (const change of pendingCloudChanges()) {
+                const result = change.type === 'delete'
+                    ? await supabaseClient.from('service_orders').delete()
+                        .eq('user_id', currentUser.id).eq('os_num', change.osNum)
+                    : await supabaseClient.from('service_orders')
+                        .upsert(cloudOrderRow(change.order), { onConflict: 'user_id,os_num' });
+                if (result.error) throw result.error;
+                clearQueuedCloudChange(change.osNum);
+            }
+        }
+
+        async function syncOrdersWithCloud() {
+            if (!supabaseClient || !currentUser) return;
+            await flushPendingCloudChanges();
+            const { data: remoteOrders, error: fetchError } = await supabaseClient
+                .from('service_orders')
+                .select('os_num, data')
+                .order('updated_at', { ascending: false });
+            if (fetchError) throw fetchError;
+
+            const remoteNumbers = new Set(remoteOrders.map(row => row.os_num));
+            const localOnly = savedOrders.filter(order => order.osNum && !remoteNumbers.has(order.osNum));
+            for (let index = 0; index < localOnly.length; index += 100) {
+                const batch = localOnly.slice(index, index + 100).map(cloudOrderRow);
+                const { error } = await supabaseClient
+                    .from('service_orders')
+                    .upsert(batch, { onConflict: 'user_id,os_num', ignoreDuplicates: true });
+                if (error) throw error;
+            }
+
+            const { data: latestOrders, error: latestError } = await supabaseClient
+                .from('service_orders')
+                .select('os_num, data')
+                .order('updated_at', { ascending: false });
+            if (latestError) throw latestError;
+            const merged = new Map((latestOrders || []).map(row => [row.os_num, row.data]));
+            for (const order of savedOrders) {
+                if (order.osNum && !merged.has(order.osNum)) merged.set(order.osNum, order);
+            }
+            savedOrders = Array.from(merged.values());
+            persistLocalOrders();
+            renderHistoryTable();
+            showToast('Ordens sincronizadas com a nuvem.');
+        }
+
+        async function syncOrderToCloud(order) {
+            if (!supabaseClient || !currentUser) return;
+            const { error } = await supabaseClient
+                .from('service_orders')
+                .upsert(cloudOrderRow(order), { onConflict: 'user_id,os_num' });
+            if (error) throw error;
+            clearQueuedCloudChange(order.osNum);
+        }
 
         async function sendGeminiChatMessage() {
             const input = document.getElementById('gemini-chat-input');
@@ -1245,9 +1513,19 @@
             } else {
                 savedOrders.unshift(osObj);
             }
-            localStorage.setItem('os_history_db', JSON.stringify(savedOrders));
+            persistLocalOrders();
 
             let savedInFolder = false;
+            let cloudSyncError = null;
+            if (supabaseClient && currentUser) {
+                try {
+                    await syncOrderToCloud(osObj);
+                } catch (error) {
+                    cloudSyncError = error;
+                    queueCloudChange({ type: 'upsert', osNum, order: osObj });
+                    console.error("Erro ao sincronizar OS com Supabase:", error);
+                }
+            }
             if (cloudDBDirectoryHandle) {
                 try {
                     let options = { mode: 'readwrite' };
@@ -1277,10 +1555,14 @@
 
             renderHistoryTable();
 
-            if (savedInFolder) {
+            if (cloudSyncError) {
+                showToast(`OS ${osNum} salva neste aparelho, mas a sincronização falhou: ${cloudSyncError.message}`);
+            } else if (savedInFolder) {
                 showToast(`OS ${osNum} salva com sucesso no Histórico e na Pasta ${cloudDBDirectoryHandle.name}!`);
+            } else if (supabaseClient && currentUser) {
+                showToast(`OS ${osNum} salva e sincronizada com a nuvem.`);
             } else {
-                showToast(`OS ${osNum} salva no Histórico Local! Para salvar direto no Drive, conecte a pasta no botão superior.`);
+                showToast(`OS ${osNum} salva neste aparelho. Conecte a pasta no botão superior para salvar também no Drive.`);
             }
         }
 
@@ -1368,8 +1650,23 @@
             if (confirm("Tem certeza que deseja excluir esta Ordem de Serviço do histórico?")) {
                 const deletedNum = savedOrders[index]?.osNum;
                 savedOrders.splice(index, 1);
-                localStorage.setItem('os_history_db', JSON.stringify(savedOrders));
+                persistLocalOrders();
 
+                let cloudDeleteError = null;
+                if (supabaseClient && currentUser && deletedNum) {
+                    try {
+                        const { error } = await supabaseClient
+                            .from('service_orders')
+                            .delete()
+                            .eq('user_id', currentUser.id)
+                            .eq('os_num', deletedNum);
+                        if (error) throw error;
+                        clearQueuedCloudChange(deletedNum);
+                    } catch (error) {
+                        cloudDeleteError = error;
+                        queueCloudChange({ type: 'delete', osNum: deletedNum });
+                    }
+                }
                 if (cloudDBDirectoryHandle) {
                     try {
                         const dbFileHandle = await cloudDBDirectoryHandle.getFileHandle('db_ordens_servico.json', { create: true });
@@ -1382,7 +1679,9 @@
                 }
 
                 renderHistoryTable();
-                showToast(`OS ${deletedNum} excluída do histórico.`);
+                showToast(cloudDeleteError
+                    ? `OS ${deletedNum} excluída neste aparelho, mas não na nuvem: ${cloudDeleteError.message}`
+                    : `OS ${deletedNum} excluída do histórico.`);
             }
         }
 
@@ -1430,18 +1729,31 @@
             downloadAnchor.remove();
         }
 
-        function importHistoryJSON(e) {
+        async function importHistoryJSON(e) {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = function(event) {
+            reader.onload = async function(event) {
                 try {
                     const imported = JSON.parse(event.target.result);
                     if (Array.isArray(imported)) {
-                        savedOrders = imported;
-                        localStorage.setItem('os_history_db', JSON.stringify(savedOrders));
+                        const ordersByNumber = new Map(savedOrders.map(order => [order.osNum, order]));
+                        imported.forEach(order => {
+                            if (order && order.osNum) ordersByNumber.set(order.osNum, order);
+                        });
+                        savedOrders = Array.from(ordersByNumber.values());
+                        persistLocalOrders();
                         renderHistoryTable();
-                        showToast("Histórico importado com sucesso!");
+                        if (supabaseClient && currentUser) {
+                            try {
+                                await syncOrdersWithCloud();
+                                showToast("Histórico importado e sincronizado com sucesso!");
+                            } catch (error) {
+                                showToast(`Histórico importado neste aparelho, mas a sincronização falhou: ${error.message}`);
+                            }
+                        } else {
+                            showToast("Histórico importado neste aparelho.");
+                        }
                     } else {
                         alert("Arquivo de backup JSON inválido.");
                     }
@@ -2203,5 +2515,3 @@
     </script>
 </body>
 </html>
-
-
